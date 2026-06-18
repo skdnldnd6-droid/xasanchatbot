@@ -10,10 +10,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
-# .env faylini tizimga yuklash
 load_dotenv()
 
-# 1. BAZAVIY SOZLAMALAR (.env faylidan olinmoqda)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID"))
 
@@ -21,15 +19,21 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# FSM - Javob berish jarayonini boshqarish holati
 class BotStates(StatesGroup):
     waiting_for_reply = State()
 
-# 2. MA'LUMOTLAR BAZASI BILAN ISHLASH
+# === RAILWAY UCHUN BAZA YO'LINI SOZLASH ===
+# Railwayda Volume ulanganimizda u /data papkasi bo'ladi. 
+# Agar lokal kompyuterda bo'lsak, oddiy fayl ochiladi.
+DB_DIR = "/data"
+if os.path.exists(DB_DIR):
+    DB_PATH = os.path.join(DB_DIR, "bot_database.db")
+else:
+    DB_PATH = "bot_database.db"
+
 def init_db():
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect(DB_PATH) # DB_PATH ishlatiladi
     cursor = conn.cursor()
-    # Hamkorlar jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS partners (
             user_id INTEGER PRIMARY KEY,
@@ -37,7 +41,6 @@ def init_db():
             clicks INTEGER DEFAULT 0
         )
     """)
-    # Faol chatlar (kim kimga yozyapti) jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_chats (
             sender_id INTEGER PRIMARY KEY,
@@ -47,11 +50,10 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Bazani ishga tushirish
 init_db()
 
 def add_partner(user_id, name):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO partners (user_id, full_name) VALUES (?, ?)", (user_id, name))
@@ -63,7 +65,7 @@ def add_partner(user_id, name):
         conn.close()
 
 def is_partner(user_id):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM partners WHERE user_id = ?", (user_id,))
     res = cursor.fetchone()
@@ -71,14 +73,14 @@ def is_partner(user_id):
     return res is not None or user_id == SUPER_ADMIN_ID
 
 def increment_click(partner_id):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("UPDATE partners SET clicks = clicks + 1 WHERE user_id = ?", (partner_id,))
     conn.commit()
     conn.close()
 
 def get_stats(partner_id):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT clicks FROM partners WHERE user_id = ?", (partner_id,))
     res = cursor.fetchone()
@@ -86,14 +88,14 @@ def get_stats(partner_id):
     return res[0] if res else 0
 
 def set_active_chat(sender_id, receiver_id):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO active_chats (sender_id, receiver_id) VALUES (?, ?)", (sender_id, receiver_id))
     conn.commit()
     conn.close()
 
 def get_receiver_id(sender_id):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT receiver_id FROM active_chats WHERE sender_id = ?", (sender_id,))
     res = cursor.fetchone()
@@ -101,7 +103,7 @@ def get_receiver_id(sender_id):
     return res[0] if res else None
 
 
-# 3. TUGMALAR (INLINE KEYBOARDS)
+# 3. TUGMALAR
 def get_partner_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Havolamni olish", callback_data="get_link")],
@@ -123,7 +125,6 @@ async def start_cmd(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     args = message.text.split()
 
-    # Agar kimdir shaxsiy havola orqali kirsa
     if len(args) > 1:
         try:
             receiver_id = int(decode_payload(args[1]))
@@ -132,7 +133,7 @@ async def start_cmd(message: types.Message, state: FSMContext):
                 return
                 
             set_active_chat(user_id, receiver_id)
-            increment_click(receiver_id)  # Statistikani oshirish
+            increment_click(receiver_id)
             
             await message.answer(
                 "🤫 **Anonim Chatga xush kelibsiz!**\n\n"
@@ -144,7 +145,6 @@ async def start_cmd(message: types.Message, state: FSMContext):
             await message.answer("❌ Havola eskirgan yoki noto'g'ri.")
             return
 
-    # Agar hamkor yoki bosh admin bo'lsa
     if is_partner(user_id):
         role = "👑 Bosh Admin" if user_id == SUPER_ADMIN_ID else "🤝 Hamkor"
         text = (
@@ -157,10 +157,10 @@ async def start_cmd(message: types.Message, state: FSMContext):
             
         await message.answer(text, reply_markup=get_partner_keyboard(), parse_mode="Markdown")
     else:
-        await message.answer("👋 Salom! Botdan foydalanish uchun sizda kimningdir shaxsiy havolasi bo'lishi kerak.")
+        await message.answer("👋 Salom! Botdan foydalanish uchun sizda kimningdir shaxsiy havolasi bo'lek.")
 
 
-# 5. TUGMA BOSILGANDA ISHLOVCHI QISM (CALLBACK HANDLERS)
+# 5. CALLBACK HANDLERS
 @dp.callback_query(F.data == "get_link")
 async def send_link_callback(callback: types.CallbackQuery):
     if is_partner(callback.from_user.id):
@@ -182,11 +182,11 @@ async def setup_reply(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(reply_target=target_id)
     await state.set_state(BotStates.waiting_for_reply)
     
-    await callback.message.answer("✍️ Javobingizni yozing yoki fayl yuboring, men uni anonim ravishda yetkazaman:")
+    await callback.message.answer("✍️ Javobingizni yozing, men uni anonim ravishda yetkazaman:")
     await callback.answer()
 
 
-# 6. JAVOB YOZISH TIZIMI (FSM)
+# 6. JAVOB YOZISH TIZIMI
 @dp.message(BotStates.waiting_for_reply)
 async def send_reply_to_user(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
@@ -198,12 +198,12 @@ async def send_reply_to_user(message: types.Message, state: FSMContext):
         await message.copy_to(chat_id=target_id)
         await message.answer("✅ Javobingiz muvaffaqiyatli yetkazildi!")
     except Exception:
-        await message.answer("❌ Xatni yetkazib bo'lmadi. Foydalanuvchi botni bloklagan bo'lishi mumkin.")
+        await message.answer("❌ Xatni yetkazib bo'mladi.")
     
     await state.clear()
 
 
-# 7. BOSH ADMIN UCHUN TANISH QO'SHISH BUYRUG'I
+# 7. SUPER ADMIN COMMANDS
 @dp.message(Command("add_user"), lambda message: message.from_user.id == SUPER_ADMIN_ID)
 async def add_user_cmd(message: types.Message):
     args = message.text.split()
@@ -221,7 +221,7 @@ async def add_user_cmd(message: types.Message):
         await message.answer("❌ ID faqat raqamlardan iborat bo'lishi shart.")
 
 
-# 8. ANONIM XABARLARNI YOʻNALTIRISH (ENG ASOSIY QISM)
+# 8. XABARLARNI YO'NALTIRISH
 @dp.message()
 async def forward_messages(message: types.Message):
     sender_id = message.from_user.id
